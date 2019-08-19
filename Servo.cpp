@@ -694,12 +694,13 @@ static uint32_t servo_allocated_mask = 0;
 static uint8_t servo_pin[MAX_SERVOS];
 static uint16_t servo_ticks[MAX_SERVOS];
 
-static IntervalTimer timer;
+static IntervalTimer timers[_Nbr_16timers];
 static void isr(void);
+static void isr2(void);
 
 Servo::Servo()
 {
-	uint16_t mask;
+	uint32_t mask;
 
 	servoIndex = 0;
 	for (mask=1; mask < (1<<MAX_SERVOS); mask <<= 1) {
@@ -727,8 +728,9 @@ uint8_t Servo::attach(int pin, int minimum, int maximum)
 		servo_active_mask |= (1<<servoIndex);
 		min_ticks = usToTicks(minimum);
 		max_ticks = usToTicks(maximum);
-		if ((IRQ_NUMBER_t)timer >= NVIC_NUM_INTERRUPTS) {
-			timer.begin(isr, 10);
+    uint8_t timer_index = servoIndex/SERVOS_PER_TIMER;
+		if ((IRQ_NUMBER_t)timers[timer_index] >= NVIC_NUM_INTERRUPTS) {
+			timers[timer_index].begin(timer_index? isr2 : isr, 10);
 		}
 	}
 	return servoIndex;
@@ -739,8 +741,16 @@ void Servo::detach()
 	if (servoIndex >= MAX_SERVOS) return;
 	servo_active_mask &= ~(1<<servoIndex);
 	servo_allocated_mask &= ~(1<<servoIndex);
-	if (servo_active_mask == 0) {
-		timer.end();
+  uint8_t timer_index = servoIndex/SERVOS_PER_TIMER;
+  uint8_t active_servo_found = 0;
+  for (uint8_t i = timer_index*SERVOS_PER_TIMER; i < (timer_index+1)*SERVOS_PER_TIMER; i++) {
+    if (servo_allocated_mask & (1<<i)) {
+      active_servo_found = 1;
+      break;
+    }
+  }
+	if (active_servo_found == 0) {
+		timers[timer_index].end();
 	}
 }
 
@@ -791,7 +801,7 @@ bool Servo::attached()
 
 static void isr(void)
 {
-	static uint8_t channel=MAX_SERVOS;
+	static uint8_t channel=SERVOS_PER_TIMER;
 	static uint8_t next_low=255;
 	static uint32_t tick_accum=0;
 
@@ -801,7 +811,7 @@ static void isr(void)
 	}
 
 	// If we're on an active channel, drive it HIGH
-	if (channel < MAX_SERVOS && (servo_active_mask & (1<<channel))) {
+	if (channel < SERVOS_PER_TIMER && (servo_active_mask & (1<<channel))) {
 		uint8_t pin = servo_pin[channel];
 		digitalWrite(pin, HIGH);
 		next_low = pin;
@@ -817,26 +827,76 @@ static void isr(void)
 	//}
 
 	// Find the next channel and set the timer up
-	if (++channel >= MAX_SERVOS) {
+	if (++channel >= SERVOS_PER_TIMER) {
 		channel = 0;
 	}
 	do {
 		if (servo_active_mask & (1<<channel)) {
 			uint32_t ticks = servo_ticks[channel];
 			tick_accum += ticks;
-			timer.update(ticksToUs_f(ticks));
+			timers[0].update(ticksToUs_f(ticks));
 			return;
 		}
 		channel++;
-	} while (channel < MAX_SERVOS);
+	} while (channel < SERVOS_PER_TIMER);
 
 	// when all channels have output, wait for the refresh interval
 	if (tick_accum < usToTicks(REFRESH_INTERVAL)) {
-		timer.update(ticksToUs_f(usToTicks(REFRESH_INTERVAL) - tick_accum));
+		timers[0].update(ticksToUs_f(usToTicks(REFRESH_INTERVAL) - tick_accum));
 	} else {
-		timer.update(ticksToUs_f(100));
+		timers[0].update(ticksToUs_f(100));
 	}
 	tick_accum = 0;
+}
+
+static void isr2(void)
+{
+  static uint8_t channel=SERVOS_PER_TIMER*2;
+  static uint8_t next_low=255;
+  static uint32_t tick_accum=0;
+
+  // If a pin is still HIGH from a prior run, turn it off
+  if (next_low < 255) {
+    digitalWrite(next_low, LOW);
+  }
+
+  // If we're on an active channel, drive it HIGH
+  if (channel < 2*SERVOS_PER_TIMER && (servo_active_mask & (1<<channel))) {
+    uint8_t pin = servo_pin[channel];
+    digitalWrite(pin, HIGH);
+    next_low = pin;
+  } else {
+    next_low = 255;
+  }
+
+  // Generate an oscilloscope trigger pulse at beginning
+  //if (channel == __builtin_ctz(servo_active_mask)) {
+    //digitalWrite(2, HIGH);
+    //delayMicroseconds(1);
+    //digitalWrite(2, LOW);
+  //}
+
+  // Find the next channel and set the timer up
+  if (++channel >= 2*SERVOS_PER_TIMER) {
+    channel = SERVOS_PER_TIMER;
+  }
+  do {
+    if (servo_active_mask & (1<<channel)) {
+      uint32_t ticks = servo_ticks[channel];
+      tick_accum += ticks;
+      timers[1].update(ticksToUs_f(ticks));
+      return;
+    }
+    channel++;
+  } while (channel < 2*SERVOS_PER_TIMER);
+
+  // when all channels have output, wait for the refresh interval
+  if (tick_accum < usToTicks(REFRESH_INTERVAL)) {
+    timers[1].update(ticksToUs_f(usToTicks(REFRESH_INTERVAL) - tick_accum));
+  } else {
+    timers[1].update(ticksToUs_f(100));
+  }
+  tick_accum = 0;
 }
 
 

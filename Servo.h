@@ -78,6 +78,8 @@ typedef enum { _timer3, _timer1, _Nbr_16timers } timer16_Sequence_t ;
 #define _useTimer1
 typedef enum { _timer3, _timer1, _Nbr_16timers } timer16_Sequence_t ;
 
+#elif defined(__arm__) && (defined(__IMXRT1052__) || defined(__IMXRT1062__))
+#define _Nbr_16timers 2                // Define max number of Interval timers we will allow here...
 #else  // everything else
 #define _useTimer1
 typedef enum { _timer1, _Nbr_16timers } timer16_Sequence_t ;                  
